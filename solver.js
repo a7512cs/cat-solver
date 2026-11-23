@@ -401,14 +401,59 @@
     return res;
   }
 
+  // 假設法的推理深度 = 畫面上「假設中 x / N」的 N（假設 + 中間推理 + 矛盾）；沒用假設法就是 0
+  const hypDepth = (r) => r.subs.length + 2;
+
+  // 依序執行 plan 裡的假設（每個深度都要 ≤ maxD），中間穿插簡單推理；最後能解完才算成功
+  function planWorks(reg, plan, maxD) {
+    const b = new Board(reg);
+    for (const p of plan) {
+      propagate(b, Infinity);
+      if (b.done() || b.dead()) break;
+      if (!b.cand.has(p)) continue;
+      const r = shortestContradiction(b, p);
+      if (!r || hypDepth(r) > maxD) return false;
+      b.cand.delete(p);
+    }
+    propagate(b, Infinity);
+    return b.done();
+  }
+
+  // 先照「每次挑最短假設」解一次，得到這關最低需要的深度；
+  // 再把用不到的假設一個個拿掉：拿掉後只要在同樣深度內還解得完，就不需要它
+  function planHypotheses(reg) {
+    const { steps } = solve(reg);
+    const trials = steps.filter((s) => s.hyp);
+    if (!trials.length) return [];
+    const maxD = Math.max(...trials.map((s) => hypDepth(s.hyp)));
+    let plan = trials.map((s) => s.info.cell);
+    for (let i = 0; i < plan.length;) {
+      const shorter = plan.slice(0, i).concat(plan.slice(i + 1));
+      if (planWorks(reg, shorter, maxD)) plan = shorter; else i++;
+    }
+    return plan;
+  }
+
   // 回傳步驟陣列；每步含 info / place / kill 及執行後的盤面快照
-  function solve(reg) {
+  // plan：預先選好的假設格子順序（沒給就每次挑最短的假設）
+  function solve(reg, plan = []) {
     const b = new Board(reg), steps = [];
     const snap = (x) => ({ cats: [...x.cats], cand: [...x.cand] });
+    plan = plan.slice();
     while (!b.done()) {
       const s = simpleStep(b);
       if (s) {
         applyStep(b, s, (info, place, kill, removed) => steps.push({ info, place, kill, removed, ...snap(b) }));
+        if (b.dead()) throw Object.assign(new Error("矛盾，可能辨識顏色有誤"), { steps });
+        continue;
+      }
+      while (plan.length && !b.cand.has(plan[0])) plan.shift();
+      const planned = plan.length ? shortestContradiction(b, plan[0]) : null;
+      if (planned) {
+        const p = plan.shift();
+        b.cand.delete(p);
+        steps.push({ info: { type: "trial", cell: p, deadUnit: planned.deadUnit }, place: null, kill: [p], removed: [p],
+          hyp: { start: planned.start, subs: planned.subs }, ...snap(b) });
       } else {
         // D. 假設法：試放一隻貓，推下去會矛盾 → 這格不行
         // 每個候選格都試，挑「精簡後推理步數最少」的，也就是最容易看出來的那個
@@ -557,12 +602,17 @@
     const { n, colors, boxes } = detectGrid(rgb, W, H, scale);
     const reg = segment(n, colors);
     const rcolors = regionColors(colors, reg, n);
-    const { cats, steps } = solve(reg);
+    const { cats, steps } = solve(reg, planHypotheses(reg));
     steps.forEach((s) => Object.assign(s, describeStep(s, n, reg)));
-    return { n, colors, boxes, reg, rcolors, cats, steps, frames: buildFrames(steps, n, reg) };
+    const maxDepth = Math.max(0, ...steps.filter((s) => s.hyp).map((s) => hypDepth(s.hyp)));
+    return { n, colors, boxes, reg, rcolors, cats, steps, maxDepth, level: levelOf(maxDepth),
+      frames: buildFrames(steps, n, reg) };
   }
 
-  const api = { detectGrid, segment, regionColors, solve, describeStep, buildFrames, run, cellName };
+  // 難度：看最高推理深度。0 = 簡單、2 = 普通、3 = 困難、4 以上 = 極難
+  function levelOf(d) { return d === 0 ? "簡單" : d <= 2 ? "普通" : d === 3 ? "困難" : "極難"; }
+
+  const api = { detectGrid, segment, regionColors, solve, planHypotheses, levelOf, describeStep, buildFrames, run, cellName };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.CatSolver = api;
 })(this);

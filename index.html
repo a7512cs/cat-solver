@@ -166,7 +166,8 @@
       buildList();
       cur = 0;
       $("result").classList.remove("hidden");
-      setStatus(`盤面 ${data.n}×${data.n}，共 ${data.steps.length} 個推理步驟（其中 ${data.n} 步放貓）。`);
+      setStatus(`盤面 ${data.n}×${data.n}，共 ${data.steps.length} 個推理步驟（其中 ${data.n} 步放貓），` +
+        `最高推理深度 ${data.maxDepth} 步　${data.level}`);
       render();
       $("result").scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (e) {
