@@ -230,58 +230,12 @@
     return reg;
   }
 
-  const PALETTE = { // 遊戲上方那排貓的顏色（約略值）
-    "咖啡": [120, 80, 50], "橘": [225, 150, 95], "黃": [200, 170, 60],
-    "綠": [130, 180, 140], "青綠": [40, 150, 170], "天藍": [60, 140, 235],
-    "淺藍": [145, 170, 230], "深藍": [40, 60, 170], "紫": [120, 70, 230],
-    "桃紅": [190, 90, 180], "粉紅": [230, 150, 210], "紅": [220, 60, 60],
-    "灰": [150, 150, 150], "淺綠": [170, 220, 120],
-  };
-
-  // 匈牙利演算法（rows ≤ cols），回傳每列指派到的欄
-  function hungarian(cost) {
-    const n = cost.length, m = cost[0].length, INF = 1e18;
-    const u = new Array(n + 1).fill(0), v = new Array(m + 1).fill(0), p = new Array(m + 1).fill(0), way = new Array(m + 1).fill(0);
-    for (let i = 1; i <= n; i++) {
-      p[0] = i; let j0 = 0;
-      const minv = new Array(m + 1).fill(INF), used = new Array(m + 1).fill(false);
-      do {
-        used[j0] = true; const i0 = p[j0]; let delta = INF, j1 = 0;
-        for (let j = 1; j <= m; j++) if (!used[j]) {
-          const cur = cost[i0 - 1][j - 1] - u[i0] - v[j];
-          if (cur < minv[j]) { minv[j] = cur; way[j] = j0; }
-          if (minv[j] < delta) { delta = minv[j]; j1 = j; }
-        }
-        for (let j = 0; j <= m; j++) if (used[j]) { u[p[j]] += delta; v[j] -= delta; } else minv[j] -= delta;
-        j0 = j1;
-      } while (p[j0] !== 0);
-      do { const j1 = way[j0]; p[j0] = p[j1]; j0 = j1; } while (j0);
-    }
-    const ans = new Array(n);
-    for (let j = 1; j <= m; j++) if (p[j]) ans[p[j] - 1] = j - 1;
-    return ans;
-  }
-
   function regionColors(colors, reg, n) {
     return Array.from({ length: n }, (_, g) => {
       const cs = [];
       reg.forEach((row, r) => row.forEach((k, c) => { if (k === g) cs.push(colors[r][c]); }));
       return [0, 1, 2].map((ch) => mean(cs.map((x) => x[ch])));
     });
-  }
-
-  function nameRegions(colors, reg, n) {
-    const regRgb = regionColors(colors, reg, n);
-    const names = Object.keys(PALETTE);
-    if (n > names.length) return regRgb.map((_, g) => `色${g + 1}`);
-    const pal = names.map((k) => PALETTE[k].map((v) => v / 255));
-    // 白平衡校正：讓辨識色的平均亮度/色偏貼近色盤
-    const palMean = [0, 1, 2].map((ch) => mean(pal.slice(0, 11).map((p) => p[ch])));
-    const regMean = [0, 1, 2].map((ch) => mean(regRgb.map((p) => p[ch])));
-    const adj = regRgb.map((p) => p.map((v, ch) => v * (palMean[ch] / regMean[ch])));
-    const palLab = pal.map(toLab);
-    const cost = adj.map((p) => { const l = toLab(p); return palLab.map((q) => dist(l, q)); });
-    return hungarian(cost).map((j) => names[j]);
   }
 
   // ---------------- 2. 邏輯解題（模擬人類步驟） ----------------
@@ -366,31 +320,31 @@
     return null;
   }
 
-  function propagate(b, limit = 200) {
+  // onStep(info, place, kill, removed)：記錄每一步（假設法的推理過程要顯示用）
+  function applyStep(b, s, onStep) {
+    const [info, place, kill] = s, before = new Set(b.cand);
+    if (place !== null) b.place(place);
+    for (const p of kill) b.cand.delete(p);
+    if (onStep) onStep(info, place, kill, [...before].filter((p) => !b.cand.has(p) && p !== place));
+  }
+
+  function propagate(b, limit = 200, onStep) {
     for (let i = 0; i < limit; i++) {
       if (b.done() || b.dead()) return;
       const s = simpleStep(b);
       if (!s) return;
-      const [, place, kill] = s;
-      if (place !== null) b.place(place);
-      for (const p of kill) b.cand.delete(p);
+      applyStep(b, s, onStep);
     }
   }
 
   // 回傳步驟陣列；每步含 info / place / kill 及執行後的盤面快照
   function solve(reg) {
     const b = new Board(reg), steps = [];
-    const snap = () => ({ cats: [...b.cats], cand: [...b.cand] });
+    const snap = (x) => ({ cats: [...x.cats], cand: [...x.cand] });
     while (!b.done()) {
       const s = simpleStep(b);
       if (s) {
-        const [info, place, kill] = s;
-        const before = new Set(b.cand);
-        if (place !== null) b.place(place);
-        for (const p of kill) b.cand.delete(p);
-        // 放貓連帶被排除的格子也記下，畫圖用
-        const removed = [...before].filter((p) => !b.cand.has(p) && p !== place);
-        steps.push({ info, place, kill, removed, ...snap() });
+        applyStep(b, s, (info, place, kill, removed) => steps.push({ info, place, kill, removed, ...snap(b) }));
       } else {
         // D. 假設法：試放一隻貓，推下去會矛盾 → 這格不行
         let found = false;
@@ -399,10 +353,15 @@
           .sort((x, y) => x[0] - y[0]);
         for (const [, , cs] of units) {
           for (const p of cs.slice().sort((x, y) => x - y)) {
-            const t = b.copy(); t.place(p); propagate(t);
+            const t = b.copy(), before = new Set(t.cand);
+            t.place(p);
+            const start = { removed: [...before].filter((q) => !t.cand.has(q) && q !== p), ...snap(t) };
+            const subs = [];
+            propagate(t, 200, (info, place, kill, removed) => subs.push({ info, place, kill, removed, ...snap(t) }));
             if (t.dead() && !t.done()) {
               b.cand.delete(p);
-              steps.push({ info: { type: "trial", cell: p, deadUnit: t.deadUnit() }, place: null, kill: [p], removed: [p], ...snap() });
+              steps.push({ info: { type: "trial", cell: p, deadUnit: t.deadUnit() }, place: null, kill: [p], removed: [p],
+                hyp: { start, subs }, ...snap(b) });
               found = true; break;
             }
           }
@@ -416,58 +375,131 @@
   }
 
   // ---------------- 3. 文字說明 ----------------
-  function pos(p, n) { return `第${Math.floor(p / n) + 1}列第${(p % n) + 1}欄`; }
-  function unitName(u, cname) { return u[0] === "色" ? `${cname[u[1]]}色區` : `第${u[1] + 1}${u[0]}`; }
+  // 座標：欄用 A、B、C…，列用 1、2、3…，格子寫成 C4
+  // 顏色區在文字裡寫成 [[g:編號]]，網頁再換成小色塊
+  const colName = (c) => String.fromCharCode(65 + c);
+  function cellName(p, n) { return `${colName(p % n)}${Math.floor(p / n) + 1}`; }
+  const regTag = (g) => `[[g:${g}]]`;
+  function lineName(axis, ls) {
+    return axis === 0 ? `第 ${ls.map((l) => l + 1).join("、")} 列` : ` ${ls.map(colName).join("、")} 欄`;
+  }
+  function unitName(u) {
+    return u[0] === "色" ? `${regTag(u[1])}區` : lineName(u[0] === "列" ? 0 : 1, [u[1]]);
+  }
+  function unitCells(u, n, reg) {
+    const all = [...Array(n * n).keys()], R = (p) => Math.floor(p / n), C = (p) => p % n;
+    return all.filter((p) => (u[0] === "列" ? R(p) === u[1] : u[0] === "欄" ? C(p) === u[1] : reg[R(p)][C(p)] === u[1]));
+  }
+  function highlightCells(info, n, reg) {
+    const all = [...Array(n * n).keys()], R = (p) => Math.floor(p / n), C = (p) => p % n, G = (p) => reg[R(p)][C(p)];
+    if (info.type === "only") return unitCells(info.unit, n, reg);
+    if (info.type === "confine") return all.filter((p) => info.grp.includes(G(p)));
+    if (info.type === "lines") return all.filter((p) => info.lines.includes(info.axis === 0 ? R(p) : C(p)));
+    return [];
+  }
 
-  function describeStep(step, n, reg, cname) {
+  function describeStep(step, n, reg) {
     const { info, place, kill } = step, regOf = (p) => reg[Math.floor(p / n)][p % n];
-    const nums = (a) => a.map((l) => l + 1).join("、");
+    const cells = (ps) => ps.slice().sort((x, y) => x - y).map((p) => cellName(p, n)).join("、");
     if (info.type === "only")
       return {
-        title: `${unitName(info.unit, cname)}只剩一格`,
-        text: `${unitName(info.unit, cname)}裡還能放貓的格子只剩 ${pos(place, n)}，所以貓一定在這裡。` +
+        title: `${unitName(info.unit)}只剩一格`,
+        text: `${unitName(info.unit)}裡還能放貓的格子只剩 ${cellName(place, n)}，所以貓一定在這裡。` +
           `放下後，同一列、同一欄、同色區，以及周圍 8 格都不能再放貓。`,
-        action: `在 ${pos(place, n)}（${cname[regOf(place)]}）放一隻貓`,
+        action: `在 ${cellName(place, n)} ${regTag(regOf(place))} 放一隻貓`,
       };
     const ax = info.axis === 0 ? "列" : "欄";
     if (info.type === "confine") {
-      const cs = info.grp.map((g) => cname[g] + "色").join("、");
+      const cs = info.grp.map(regTag).join("");
+      const k = info.lines.length;
       return {
-        title: `${cs}被限制在第${nums(info.lines)}${ax}`,
-        text: `${cs}剩下能放的格子全部落在第${nums(info.lines)}${ax}（共 ${info.lines.length} ${ax}）。` +
-          `這 ${info.lines.length} ${ax}的貓一定被${info.grp.length > 1 ? "這幾種顏色" : "這個顏色"}用掉，所以這些${ax}裡其他顏色的格子都不能放。`,
-        action: `把 ${kill.length} 格標記 ✕`,
+        title: `${cs}只能在${lineName(info.axis, info.lines)}`,
+        text: `${cs}剩下能放的格子全部落在${lineName(info.axis, info.lines)}（共 ${k} ${ax}）。` +
+          `這 ${k} ${ax}的貓一定被${k > 1 ? "這幾個色區" : "這個色區"}用掉，所以${k > 1 ? "這些" : "這"}${ax}裡其他顏色的格子都不能放。`,
+        action: `把 ${kill.length} 格標記 ✕：${cells(kill)}`,
       };
     }
     if (info.type === "lines") {
-      const cs = info.regs.map((g) => cname[g] + "色").join("、");
+      const cs = info.regs.map(regTag).join("");
+      const k = info.lines.length;
       return {
-        title: `第${nums(info.lines)}${ax}只剩${cs}`,
-        text: `第${nums(info.lines)}${ax}還能放貓的格子只剩${cs}（共 ${info.regs.length} 種顏色）。` +
-          `這幾${ax}各需要一隻貓，剛好用掉這些顏色，所以這些顏色在其他${ax}的格子都不能放。`,
-        action: `把 ${kill.length} 格標記 ✕`,
+        title: `${lineName(info.axis, info.lines)}只剩${cs}`,
+        text: `${lineName(info.axis, info.lines)}還能放貓的格子只剩${cs}（共 ${info.regs.length} 個色區）。` +
+          `這 ${k} ${ax}各需要一隻貓，剛好用掉這些色區，所以這些色區在其他${ax}的格子都不能放。`,
+        action: `把 ${kill.length} 格標記 ✕：${cells(kill)}`,
       };
     }
-    const du = info.deadUnit ? `${unitName(info.deadUnit, cname)}會完全沒有位置` : "會出現矛盾";
+    const c = cellName(info.cell, n);
     return {
-      title: `假設法：${pos(info.cell, n)} 不能放`,
-      text: `簡單推理用完了，改用假設：如果在 ${pos(info.cell, n)} 放貓，照規則一路推下去，${du}。所以這格不能放貓。`,
-      action: `把 ${pos(info.cell, n)} 標記 ✕`,
+      title: `假設法：${c} 不能放`,
+      text: `剛才假設 ${c} 放貓，推下去${info.deadUnit ? `${unitName(info.deadUnit)}會完全沒有位置` : "會出現矛盾"}，` +
+        `所以 ${c} 不能放貓。`,
+      action: `把 ${c} 標記 ✕`,
     };
+  }
+
+  // 把步驟展開成一張張畫面；假設法展開成「假設 → 推理過程 → 矛盾 → 結論」
+  function buildFrames(steps, n, reg) {
+    const frames = [], all = [...Array(n * n).keys()], wait = "這是假設，遊戲裡先不要動";
+    let cats = [], cand = all;
+    frames.push({ kind: "start", stepNo: 0, cats: [], hypCats: [], cand: all, fresh: [], newCats: [], hl: [], dead: [] });
+    steps.forEach((s, i) => {
+      const stepNo = i + 1;
+      if (s.info.type === "trial") {
+        const p = s.info.cell, c = cellName(p, n), { start, subs } = s.hyp, total = subs.length + 2;
+        const hypOf = (x) => x.cats.filter((q) => !cats.includes(q));
+        // 只因為假設才被排除的格子（畫成紫色 ✕）
+        const realCand = cand, hypGone = (x) => realCand.filter((q) => !x.cand.includes(q) && !x.cats.includes(q));
+        frames.push({
+          kind: "hyp", stepNo, sub: 1, subTotal: total, cats, hypCats: hypOf(start), hypGone: hypGone(start), cand: start.cand, fresh: start.removed,
+          newCats: [p], hl: [], dead: [],
+          title: `假設 ${c} 放貓`,
+          text: `前面的簡單推理都用完了，改用假設法：先假設 ${c} 放貓，照規則一路推下去，看會不會出問題。` +
+            `放下後，同一列、同一欄、同色區和周圍 8 格都被排除（紅 ✕）。`,
+          action: wait,
+        });
+        let last = start;
+        subs.forEach((sub, j) => {
+          const d = describeStep(sub, n, reg);
+          frames.push({
+            kind: "hyp", stepNo, sub: j + 2, subTotal: total, cats, hypCats: hypOf(sub), hypGone: hypGone(sub), cand: sub.cand, fresh: sub.removed,
+            newCats: sub.place !== null ? [sub.place] : [], hl: highlightCells(sub.info, n, reg), dead: [],
+            title: `（假設中）${d.title}`, text: d.text, action: wait,
+          });
+          last = sub;
+        });
+        const du = s.info.deadUnit;
+        frames.push({
+          kind: "hyp", stepNo, sub: total, subTotal: total, cats, hypCats: hypOf(last), hypGone: hypGone(last), cand: last.cand, fresh: [],
+          newCats: [], hl: [], dead: du ? unitCells(du, n, reg) : [],
+          title: du ? `矛盾！${unitName(du)}沒有位置了` : "矛盾！",
+          text: (du ? `推到這裡，${unitName(du)}的每一格都被排除了（紅框，紫色 ✕ 是假設造成的排除），可是${unitName(du)}一定要有一隻貓。`
+            : "推到這裡出現矛盾。") + `所以「${c} 放貓」這個假設不成立。`,
+          action: wait,
+        });
+      }
+      const d = describeStep(s, n, reg);
+      frames.push({
+        kind: "main", stepNo, cats: s.cats, hypCats: [], cand: s.cand, fresh: s.removed,
+        newCats: s.place !== null ? [s.place] : [], hl: highlightCells(s.info, n, reg), dead: [],
+        isCat: s.place !== null, ...d,
+      });
+      cats = s.cats; cand = s.cand;
+    });
+    return frames;
   }
 
   // 整合流程：輸入縮放後的 RGB，輸出所有資料
   function run(rgb, W, H, scale) {
     const { n, colors, boxes } = detectGrid(rgb, W, H, scale);
     const reg = segment(n, colors);
-    const cname = nameRegions(colors, reg, n);
     const rcolors = regionColors(colors, reg, n);
     const { cats, steps } = solve(reg);
-    steps.forEach((s) => Object.assign(s, describeStep(s, n, reg, cname)));
-    return { n, colors, boxes, reg, cname, rcolors, cats, steps };
+    steps.forEach((s) => Object.assign(s, describeStep(s, n, reg)));
+    return { n, colors, boxes, reg, rcolors, cats, steps, frames: buildFrames(steps, n, reg) };
   }
 
-  const api = { detectGrid, segment, nameRegions, regionColors, solve, describeStep, run, pos };
+  const api = { detectGrid, segment, regionColors, solve, describeStep, buildFrames, run, cellName };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.CatSolver = api;
 })(this);
