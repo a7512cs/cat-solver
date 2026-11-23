@@ -337,6 +337,70 @@
     }
   }
 
+  // 在盤面 b 上重新檢查一步推理是否仍成立；成立就回傳（依目前盤面重算的）[info, place, kill]，否則 null
+  function recheck(b, s) {
+    const { info, place } = s, n = b.n;
+    const axisOf = (p, axis) => (axis === 0 ? Math.floor(p / n) : p % n);
+    const catRegs = new Set([...b.cats].map((q) => b.regOf(q)));
+    if (place !== null) {
+      if (!b.cand.has(place)) return null;
+      // 只要有任何一個列/欄/色區只剩這格，就成立（優先沿用原本的理由）
+      const forced = b.units().filter(([, cells]) => cells.includes(place) && !cells.some((q) => b.cats.has(q)) &&
+        cells.filter((q) => b.cand.has(q)).length === 1);
+      if (!forced.length) return null;
+      const same = forced.find(([u]) => u[0] === info.unit[0] && u[1] === info.unit[1]) || forced[0];
+      return [{ type: "only", unit: same[0] }, place, []];
+    }
+    if (info.type === "confine") {
+      if (info.grp.some((g) => catRegs.has(g))) return null;
+      const lines = new Set([...b.cand].filter((q) => info.grp.includes(b.regOf(q))).map((q) => axisOf(q, info.axis)));
+      if (lines.size !== info.grp.length) return null;
+      const kill = [...b.cand].filter((q) => lines.has(axisOf(q, info.axis)) && !info.grp.includes(b.regOf(q)));
+      return kill.length ? [{ ...info, lines: [...lines].sort((x, y) => x - y) }, null, kill] : null;
+    }
+    if (info.type === "lines") {
+      if ([...b.cats].some((q) => info.lines.includes(axisOf(q, info.axis)))) return null;
+      const regs = new Set([...b.cand].filter((q) => info.lines.includes(axisOf(q, info.axis))).map((q) => b.regOf(q)));
+      if (regs.size !== info.lines.length) return null;
+      const kill = [...b.cand].filter((q) => regs.has(b.regOf(q)) && !info.lines.includes(axisOf(q, info.axis)));
+      return kill.length ? [{ ...info, regs: [...regs].sort((x, y) => x - y) }, null, kill] : null;
+    }
+    return null;
+  }
+
+  // 假設 p 放貓後，照 chain 的順序重播推理；每步都重新檢查，最後要出現矛盾才算成功
+  function replay(b, p, chain) {
+    const snap = (x) => ({ cats: [...x.cats], cand: [...x.cand] });
+    const t = b.copy(), before = new Set(t.cand);
+    t.place(p);
+    const start = { removed: [...before].filter((q) => !t.cand.has(q) && q !== p), ...snap(t) };
+    const subs = [];
+    for (const s of chain) {
+      if (t.dead()) break;
+      const r = recheck(t, s);
+      if (!r) return null;
+      applyStep(t, r, (info, place, kill, removed) => subs.push({ info, place, kill, removed, ...snap(t) }));
+    }
+    return t.dead() && !t.done() ? { start, subs, deadUnit: t.deadUnit() } : null;
+  }
+
+  // 假設 p 放貓：先照一般順序推到矛盾，再把跟矛盾無關的步驟一一拿掉
+  function shortestContradiction(b, p) {
+    const t = b.copy();
+    t.place(p);
+    let chain = [];
+    propagate(t, 200, (info, place, kill) => chain.push({ info, place, kill }));
+    if (!t.dead() || t.done()) return null;
+    let res = replay(b, p, chain);
+    if (!res) return null;
+    chain = res.subs;
+    for (let i = 0; i < chain.length;) {
+      const r = replay(b, p, chain.slice(0, i).concat(chain.slice(i + 1)));
+      if (r) { res = r; chain = r.subs; } else i++;
+    }
+    return res;
+  }
+
   // 回傳步驟陣列；每步含 info / place / kill 及執行後的盤面快照
   function solve(reg) {
     const b = new Board(reg), steps = [];
@@ -347,27 +411,26 @@
         applyStep(b, s, (info, place, kill, removed) => steps.push({ info, place, kill, removed, ...snap(b) }));
       } else {
         // D. 假設法：試放一隻貓，推下去會矛盾 → 這格不行
-        let found = false;
+        // 每個候選格都試，挑「精簡後推理步數最少」的，也就是最容易看出來的那個
         const units = b.units().filter(([, cells]) => !cells.some((p) => b.cats.has(p)))
           .map(([u, cells]) => [cells.filter((p) => b.cand.has(p)).length, u, cells.filter((p) => b.cand.has(p))])
           .sort((x, y) => x[0] - y[0]);
-        for (const [, , cs] of units) {
+        let best = null;
+        const tried = new Set();
+        search: for (const [, , cs] of units) {
           for (const p of cs.slice().sort((x, y) => x - y)) {
-            const t = b.copy(), before = new Set(t.cand);
-            t.place(p);
-            const start = { removed: [...before].filter((q) => !t.cand.has(q) && q !== p), ...snap(t) };
-            const subs = [];
-            propagate(t, 200, (info, place, kill, removed) => subs.push({ info, place, kill, removed, ...snap(t) }));
-            if (t.dead() && !t.done()) {
-              b.cand.delete(p);
-              steps.push({ info: { type: "trial", cell: p, deadUnit: t.deadUnit() }, place: null, kill: [p], removed: [p],
-                hyp: { start, subs }, ...snap(b) });
-              found = true; break;
-            }
+            if (tried.has(p)) continue;
+            tried.add(p);
+            const r = shortestContradiction(b, p);
+            if (r && (!best || r.subs.length < best.r.subs.length)) best = { p, r };
+            if (best && best.r.subs.length === 0) break search; // 放下去馬上矛盾，不可能更短
           }
-          if (found) break;
         }
-        if (!found) throw Object.assign(new Error("推不下去了，可能辨識顏色有誤"), { steps });
+        if (!best) throw Object.assign(new Error("推不下去了，可能辨識顏色有誤"), { steps });
+        const { p, r } = best;
+        b.cand.delete(p);
+        steps.push({ info: { type: "trial", cell: p, deadUnit: r.deadUnit }, place: null, kill: [p], removed: [p],
+          hyp: { start: r.start, subs: r.subs }, ...snap(b) });
       }
       if (b.dead()) throw Object.assign(new Error("矛盾，可能辨識顏色有誤"), { steps });
     }

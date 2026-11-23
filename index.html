@@ -18,7 +18,13 @@
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
     font: 16px/1.6 system-ui, -apple-system, "Segoe UI", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif; }
-  main { max-width: 640px; margin: 0 auto; padding: 20px 16px 60px; }
+  main { max-width: 1040px; margin: 0 auto; padding: 20px 16px 60px; }
+  .intro { max-width: 640px; }
+  /* 寬螢幕：左邊盤面、右邊說明，同一個畫面看得到 */
+  @media (min-width: 860px) {
+    #result:not(.hidden) { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; align-items: start; }
+    #result .side { position: sticky; top: 12px; }
+  }
   h1 { font-size: 1.5rem; margin: 0 0 4px; }
   .sub { color: var(--muted); margin: 0 0 20px; font-size: .95rem; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 16px; }
@@ -37,6 +43,7 @@
   .seg button.on { background: var(--accent); color: #fff; }
   .board { border-radius: 12px; border: 3px solid transparent; transition: border-color .2s; }
   .board.hyp { border-color: var(--hyp); }
+  .board { margin: 0 auto; }
   canvas { width: 100%; height: auto; display: block; border-radius: 9px; touch-action: manipulation; }
   .nav { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; margin-top: 14px; }
   .nav button { font: inherit; font-weight: 600; border: 0; border-radius: 10px; padding: 12px 18px; cursor: pointer; }
@@ -69,6 +76,7 @@
 </head>
 <body>
 <main>
+  <div class="intro">
   <h1>🐱 找貓貓解題器</h1>
   <p class="sub">上傳遊戲截圖，一步一步告訴你貓要放哪裡、為什麼。</p>
 
@@ -78,6 +86,7 @@
     <input type="file" id="file" accept="image/*">
   </label>
   <div id="status"></div>
+  </div>
 
   <section id="result" class="hidden">
     <div class="card">
@@ -97,13 +106,15 @@
       <div class="progress"><i id="bar"></i></div>
     </div>
 
-    <div class="card" id="explain"></div>
+    <div class="side">
+      <div class="card" id="explain"></div>
 
-    <div class="card">
-      <details>
-        <summary>全部步驟</summary>
-        <ol class="steps" id="list"></ol>
-      </details>
+      <div class="card">
+        <details>
+          <summary>全部步驟</summary>
+          <ol class="steps" id="list"></ol>
+        </details>
+      </div>
     </div>
   </section>
 
@@ -193,8 +204,14 @@
     const cats = new Set(f.cats), hypCats = new Set(f.hypCats), cand = new Set(f.cand);
     const fresh = new Set(f.fresh), newCats = new Set(f.newCats), isHyp = f.kind === "hyp";
 
+    // 盤面大小：寬度塞得下就好，高度最多佔螢幕一部分，讓說明也看得到
     const dpr = window.devicePixelRatio || 1;
-    const cssW = cv.clientWidth || 600;
+    const avail = $("board").parentElement.clientWidth - 6;
+    const vh = window.innerHeight || 800;
+    // 寬螢幕扣掉工具列＋按鈕的高度；窄螢幕只用一半，下面留給說明
+    const maxH = window.innerWidth >= 860 ? vh - 200 : vh * 0.45;
+    const cssW = Math.max(240, Math.min(avail, maxH * (crop.w + G) / (crop.h + G)));
+    $("board").style.width = `${cssW + 6}px`;
     const k = (cssW * dpr) / (crop.w + G);
     cv.width = Math.round((crop.w + G) * k); cv.height = Math.round((crop.h + G) * k);
     const tx = (x) => (x - crop.x + G) * k, ty = (y) => (y - crop.y + G) * k;
