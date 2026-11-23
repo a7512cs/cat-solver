@@ -609,8 +609,8 @@
       frames: buildFrames(steps, n, reg) };
   }
 
-  // 難度：看最高推理深度。0 = 簡單、2 = 普通、3 = 困難、4 以上 = 極難
-  function levelOf(d) { return d === 0 ? "簡單" : d <= 2 ? "普通" : d === 3 ? "困難" : "極難"; }
+  // 難度：看最高推理深度。0 = 簡單、2 = 普通、3 = 困難、4 = 極難、5 以上 = 地獄
+  function levelOf(d) { return d === 0 ? "簡單" : d <= 2 ? "普通" : d === 3 ? "困難" : d === 4 ? "極難" : "地獄"; }
 
   const api = { detectGrid, segment, regionColors, solve, planHypotheses, levelOf, describeStep, buildFrames, run, cellName };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
